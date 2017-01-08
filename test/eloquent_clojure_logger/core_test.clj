@@ -1,9 +1,9 @@
 (ns eloquent-clojure-logger.core-test
-  (:require [clojure.java.io :as io]
+  (:require [clj-time.core]
+            [clojure.java.io :as io]
             [clojure.test :refer :all]
             [eloquent-clojure-logger.core :refer :all]
-            [msgpack.core :as msg])
-  )
+            [msgpack.core :as msg]))
 
 (def
   messages
@@ -20,6 +20,22 @@
     (if (> (.available s) 0)
       (recur s (conj events (msg/unpack s)))
       events)))
+
+(deftest test-encode-event
+  (testing "Testing encode-event"
+    (let [encoded-event (clj-time.core/do-at
+                          (clj-time.core/date-time 2016 1 4)
+                          (encode-event {}))
+          event-array (msg/unpack encoded-event)]
+        (is (= (first event-array) 1451865600))
+        (is (= (second event-array) {}))
+        )
+    (let [encoded-event (clj-time.core/do-at
+                          (clj-time.core/date-time 2016 1 5)
+                          (encode-event {"message" "hello there"}))
+          event-array (msg/unpack encoded-event)]
+        (is (= (first event-array) 1451952000))
+        (is (= (second event-array) {"message" "hello there"})))))
 
 (deftest test-pack-foward
   (testing "Testing outermost envelope."
@@ -57,3 +73,4 @@
       (is (map? (second first-event)))
       (is (= ((second first-event) "message") "this is one"))
       (is (= ((second second-event) "message") "this is two")))))
+

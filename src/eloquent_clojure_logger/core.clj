@@ -13,6 +13,9 @@
      (clj-time.core/now))
    1000))
 
+(defn encode-event [event]
+  (msg/pack [(event-time) event]))
+
 (defn- event-stream [events]
   (let [out (ByteArrayOutputStream.)]
     (doseq [event events]
