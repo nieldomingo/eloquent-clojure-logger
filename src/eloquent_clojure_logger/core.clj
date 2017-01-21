@@ -19,7 +19,7 @@
 (defn- event-stream [events]
   (let [out (ByteArrayOutputStream.)]
     (doseq [event events]
-      (.write out (msg/pack [(event-time) event])))
+      (.write out event))
     (.toByteArray out)))
 
 (defn to-pack-forward
@@ -34,4 +34,4 @@
   @(tcp/client {:host host :port port}))
 
 (defn eloquent-log [client tag event]
-  @(s/put! client (to-pack-forward tag [event])))
+  @(s/put! client (to-pack-forward tag [(encode-event event)])))

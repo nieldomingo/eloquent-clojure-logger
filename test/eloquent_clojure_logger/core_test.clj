@@ -5,15 +5,6 @@
             [eloquent-clojure-logger.core :refer :all]
             [msgpack.core :as msg]))
 
-(def
-  messages
-  [{
-    "message" "this is one"
-  }
-  {
-    "message" "this is two"
-  }])
-
 (defn- extract-events
   ([s] (extract-events s []))
   ([s events]
@@ -37,40 +28,32 @@
         (is (= (first event-array) 1451952000))
         (is (= (second event-array) {"message" "hello there"})))))
 
+(def message (byte-array (map (comp byte int) "ascii")))
+
 (deftest test-pack-foward
   (testing "Testing outermost envelope."
-    (let [encoded (to-pack-forward "my.tag" messages)
+    (let [encoded (to-pack-forward "my.tag" [message])
           outermost (msg/unpack encoded)]
       (is (= (count outermost) 3))
       (is (= (first outermost) "my.tag"))
       (is (map? (last outermost)))
-      (is (= ((last outermost) "size") 2)))
-    (let [encoded (to-pack-forward "my.other.tag" (concat messages messages))
+      (is (= ((last outermost) "size") 1)))
+    (let [encoded (to-pack-forward "my.other.tag" [message message])
           outermost (msg/unpack encoded)]
       (is (= (first outermost) "my.other.tag"))
-      (is (= ((last outermost) "size") 4))))
+      (is (= ((last outermost) "size") 2))))
   (testing "Testing event-stream"
-    (let [encoded (to-pack-forward "my.tag" messages)
+    (let [encoded (to-pack-forward
+                    "my.tag"
+                    [message])
           outermost (msg/unpack encoded)
-          encoded-event-stream (second outermost)
-          events (extract-events (io/input-stream encoded-event-stream))]
-      (is (= (count events) 2))
-      (is (= (count (first events)) 2))
-      (is (integer? (first (first events))))
-      )
-    (let [encoded (to-pack-forward "my.tag" (concat messages messages))
+          encoded-event-stream (second outermost)]
+      (is (= (String. (bytes encoded-event-stream)) "ascii")))
+    (let [encoded (to-pack-forward
+                    "my.tag"
+                    [message message])
           outermost (msg/unpack encoded)
-          encoded-event-stream (second outermost)
-          events (extract-events (io/input-stream encoded-event-stream))]
-      (is (= (count events) 4)))
-      )
-  (testing "Testing event"
-    (let [encoded (to-pack-forward "my.tag" messages)
-          outermost (msg/unpack encoded)
-          encoded-event-stream (second outermost)
-          [first-event second-event] (extract-events (io/input-stream encoded-event-stream))]
-      (is (integer? (first first-event)))
-      (is (map? (second first-event)))
-      (is (= ((second first-event) "message") "this is one"))
-      (is (= ((second second-event) "message") "this is two")))))
+          encoded-event-stream (second outermost)]
+      (is (= (String. (bytes encoded-event-stream)) "asciiascii")))
+      ))
 
