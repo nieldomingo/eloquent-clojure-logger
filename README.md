@@ -12,9 +12,9 @@ expect it to be full-featured. Some planned features are
 
     user=> (require '[eloquent-clojure-logger.core :refer :all])
     nil
-    user=> (def c (eloquent-client))
+    user=> (def c (eloquent-client :tag "my.tag"))
     #'user/c
-    user=> (eloquent-log c "my.tag" {"message" "logging..."})
+    user=> (eloquent-log c {"message" "logging..."})
     true
     user=> 
 

@@ -4,6 +4,7 @@
               [clj-time.coerce]
               [clj-time.core]
               [clj-uuid :as uuid]
+              [manifold.deferred :as d]
               [manifold.stream :as s]
               [msgpack.core :as msg])
     (:import java.io.ByteArrayOutputStream))
@@ -33,16 +34,58 @@
   ([tag messages] (to-pack-forward tag messages {}))
   ([tag messages options]
     (msg/pack [tag
-               (event-stream messages)
-               (merge
-                options
-                {"size" (count messages)})])))
+                (event-stream messages)
+                (merge
+                 options
+                 {"size" (count messages)})])))
 
-(defn eloquent-client [& {:keys [host port]
-                         :or {host "127.0.0.1"
-                              port 24224}}]
-  @(tcp/client {:host host :port port}))
+(defn eloquent-client [& {:keys [host port tag flush-interval max-chunk-cnt-size
+                                 buffer-cnt-size]
+                          :or {host "127.0.0.1"
+                               port 24224
+                               tag "my.tag"
+                               flush-interval 10
+                               max-chunk-cnt-size 2
+                               buffer-cnt-size 1000}}]
+  (let [buffer-stream (s/stream buffer-cnt-size)
+        output-stream (s/stream 1000)
+        client @(tcp/client {:host host :port port})
+        take-timeout 100]
+    (d/loop [message-chunk []]
+      (d/chain
+        (s/try-take! buffer-stream ::drained take-timeout ::timeout)
+        (fn [message]
+          (if (or
+                (identical? message ::drained)
+                (identical? message ::timeout))
+            message-chunk
+            (conj message-chunk (encode-event message))))
+        (fn [message-chunk]
+          (cond
+            (= (count message-chunk) max-chunk-cnt-size) [message-chunk ::flush]
+            ;TODO: add time flushing here
+            :else [message-chunk ::no-flush]))
+        (fn [[message-chunk flush-flag]]
+          (if (identical? ::flush flush-flag)
+            (do
+              @(s/put! output-stream message-chunk)
+              (d/recur []))
+            (d/recur message-chunk)))
+        ))
+    (d/loop []
+      (d/chain
+        (s/take! output-stream)
+        (fn [message-chunk]
+          (s/put!
+            client
+            (to-pack-forward tag message-chunk)
+            ))
+        (fn [& args]
+          (prn args)
+          (d/recur)
+          )))
+    buffer-stream))
 
-(defn eloquent-log [client tag event]
-  @(s/put! client (to-pack-forward tag [(encode-event event)])))
+(defn eloquent-log [client event]
+  @(s/put! client event))
 
