@@ -33,15 +33,22 @@
 (deftest test-pack-foward
   (testing "Testing outermost envelope."
     (let [encoded (to-pack-forward "my.tag" [message])
-          outermost (msg/unpack encoded)]
+          outermost (msg/unpack encoded)
+          options (last outermost)]
       (is (= (count outermost) 3))
       (is (= (first outermost) "my.tag"))
-      (is (map? (last outermost)))
-      (is (= ((last outermost) "size") 1)))
-    (let [encoded (to-pack-forward "my.other.tag" [message message])
-          outermost (msg/unpack encoded)]
+      (is (map? options))
+      (is (= (options "size") 1))
+      (is (not (contains? options "chunk"))))
+    (let [encoded (to-pack-forward
+                   "my.other.tag"
+                   [message message]
+                   {"chunk" "chunk_id"})
+          outermost (msg/unpack encoded)
+          options (last outermost)]
       (is (= (first outermost) "my.other.tag"))
-      (is (= ((last outermost) "size") 2))))
+      (is (= (options "size") 2))
+      (is (= (options "chunk") "chunk_id"))))
   (testing "Testing event-stream"
     (let [encoded (to-pack-forward
                     "my.tag"
