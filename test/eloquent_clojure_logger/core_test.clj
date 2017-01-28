@@ -1,8 +1,10 @@
 (ns eloquent-clojure-logger.core-test
-  (:require [clj-time.core]
+  (:require [aleph.tcp :as tcp]
+            [clj-time.core]
             [clojure.java.io :as io]
             [clojure.test :refer :all]
             [eloquent-clojure-logger.core :refer :all]
+            [manifold.stream :as s]
             [msgpack.core :as msg]))
 
 (defn- extract-events
@@ -64,3 +66,20 @@
       (is (= (String. (bytes encoded-event-stream)) "asciiascii")))
       ))
 
+(deftest test-eloquent-logging
+  (testing "testing max-chunk-cnt-size"
+    (let [tcp-client-stream (s/stream)]
+      (with-redefs [tcp/client (fn [&args] (future tcp-client-stream))
+                    encode-event (fn [message] message)
+                    to-pack-forward (fn [tag message-chunk] message-chunk)]
+        (let [client (eloquent-client
+                       :flush-interval 1000
+                       :max-chunk-cnt-size 5)]
+          (dotimes [n 12] (eloquent-log client ""))
+          (let [chunk1 @(s/try-take! tcp-client-stream ::drained 1 ::timeout)
+                chunk2 @(s/try-take! tcp-client-stream ::drained 1 ::timeout)
+                chunk3 @(s/try-take! tcp-client-stream ::drained 1 ::timeout)]
+            (is (= (count chunk1) 5))
+            (is (= (count chunk2) 5))
+            (is (identical? chunk3 ::timeout)))))))
+            )

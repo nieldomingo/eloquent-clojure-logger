@@ -70,8 +70,7 @@
             (do
               @(s/put! output-stream message-chunk)
               (d/recur []))
-            (d/recur message-chunk)))
-        ))
+            (d/recur message-chunk)))))
     (d/loop []
       (d/chain
         (s/take! output-stream)
@@ -87,4 +86,3 @@
 
 (defn eloquent-log [client event]
   @(s/put! client event))
-
