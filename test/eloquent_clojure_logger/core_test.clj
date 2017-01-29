@@ -14,6 +14,9 @@
       (recur s (conj events (msg/unpack s)))
       events)))
 
+(defn- get-chunk-id [event-chunk]
+  ((last (msg/unpack event-chunk)) "chunk"))
+
 (deftest test-encode-event
   (testing "Testing encode-event"
     (let [encoded-event (clj-time.core/do-at
@@ -92,5 +95,38 @@
                        :max-chunk-cnt-size 5)]
           (dotimes [n 3] (eloquent-log client ""))
           (let [chunk1 @(s/try-take! tcp-client-stream ::drained 100 ::timeout)]
-            (is (and (coll? chunk1) (= (count chunk1) 3)))
-            ))))))
+            (is (and (coll? chunk1) (= (count chunk1) 3))))))))
+  (testing "testing acks retry"
+    (let [tcp-client-sink (s/stream 10)
+          tcp-client-source (s/stream 10)
+          tcp-client-stream (s/splice tcp-client-sink tcp-client-source)]
+      (with-redefs [tcp/client (fn [options] (future tcp-client-stream))]
+        (let [client (eloquent-client
+                       :flush-interval 1000000
+                       :max-chunk-cnt-size 5
+                       :use-ack true
+                       :ack-resend-time 100)]
+          (dotimes [n 5] (eloquent-log client {"hello" "world"}))
+          (let [chunk1 @(s/try-take! tcp-client-sink ::drained 1000 ::timeout)
+                chunk2 @(s/try-take! tcp-client-sink ::drained 1000 ::timeout)]
+            (is (not (identical? chunk1 ::timeout)))
+            (is (not (identical? chunk2 ::timeout)))
+            (is (= (get-chunk-id chunk1) (get-chunk-id chunk2)))
+            )))))
+  (testing "testing acks acknowledgement"
+    (let [tcp-client-sink (s/stream 10)
+          tcp-client-source (s/stream 10)
+          tcp-client-stream (s/splice tcp-client-sink tcp-client-source)]
+      (with-redefs [tcp/client (fn [options] (future tcp-client-stream))]
+        (let [client (eloquent-client
+                       :flush-interval 1000000
+                       :max-chunk-cnt-size 5
+                       :use-ack true
+                       :ack-resend-time 1000)]
+          (dotimes [n 5] (eloquent-log client {"hello" "world"}))
+          (let [chunk1 @(s/try-take! tcp-client-sink ::drained 100 ::timeout)
+                options (last (msg/unpack chunk1))
+                chunk-id (options "chunk")]
+            @(s/put! tcp-client-source (msg/pack {"ack" chunk-id}))
+            (let [chunk2 @(s/try-take! tcp-client-sink ::drained 1000 ::timeout)]
+              (is (identical? chunk2 ::timeout)))))))))

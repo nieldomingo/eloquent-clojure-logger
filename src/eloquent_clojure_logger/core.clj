@@ -27,7 +27,7 @@
       (.write out event))
     (.toByteArray out)))
 
-(defn- gen-chunk-id []
+(defn gen-chunk-id []
   (.encodeToString base64-encoder (uuid/to-byte-array (uuid/v4))))
 
 (defn to-pack-forward
@@ -40,13 +40,15 @@
                  {"size" (count messages)})])))
 
 (defn eloquent-client [& {:keys [host port tag flush-interval max-chunk-cnt-size
-                                 buffer-cnt-size]
+                                 buffer-cnt-size use-ack ack-resend-time]
                           :or {host "127.0.0.1"
                                port 24224
                                tag "my.tag"
                                flush-interval 10000
                                max-chunk-cnt-size 2
-                               buffer-cnt-size 1000}}]
+                               buffer-cnt-size 1000
+                               use-ack false
+                               ack-resend-time 60000}}]
   (let [buffer-stream (s/stream buffer-cnt-size)
         output-stream (s/stream 1000)
         client @(tcp/client {:host host :port port})
@@ -75,17 +77,39 @@
               @(s/put! output-stream message-chunk)
               (d/recur [] (uuid/monotonic-time)))
             (d/recur message-chunk ref-time-ns)))))
-    (d/loop []
-      (d/chain
-        (s/take! output-stream)
-        (fn [message-chunk]
-          (s/put!
-            client
-            (to-pack-forward tag message-chunk)
-            ))
-        (fn [& args]
-          (d/recur)
-          )))
+    (if use-ack
+      (d/loop []
+        (d/chain
+          (s/take! output-stream)
+          (fn [message-chunk]
+            (let [chunk-id (gen-chunk-id)]
+              (d/loop []
+                (d/chain
+                  (s/put!
+                    client
+                    (to-pack-forward tag message-chunk {"chunk" chunk-id}))
+                  (fn [response]
+                    (s/try-take! client ::drained ack-resend-time ::timeout))
+                  (fn [response]
+                    (if (identical? response ::timeout)
+                      (d/recur)
+                      (let [response-chunk-id ((msg/unpack response) "ack")]
+                        (when-not (= response-chunk-id chunk-id)
+                          (d/recur)))))))))
+          (fn [& args]
+            (d/recur))))
+      (d/loop []
+        (d/chain
+          (s/take! output-stream)
+          (fn [message-chunk]
+            (s/put!
+              client
+              (to-pack-forward tag message-chunk)
+              ))
+          (fn [& args]
+            (d/recur)
+            )))
+            )
     buffer-stream))
 
 (defn eloquent-log [client event]
