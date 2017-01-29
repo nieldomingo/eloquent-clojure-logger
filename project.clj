@@ -1,4 +1,4 @@
-(defproject eloquent-clojure-logger "0.1.0-SNAPSHOT"
+(defproject eloquent-clojure-logger "0.1.0-alpha"
   :description "Alternative Fluentd logger"
   :url "https://github.com/nieldomingo/eloquent-clojure-logger"
   :license {:name "Eclipse Public License"

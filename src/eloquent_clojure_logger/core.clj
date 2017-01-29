@@ -45,7 +45,7 @@
                                port 24224
                                tag "my.tag"
                                flush-interval 10000
-                               max-chunk-cnt-size 2
+                               max-chunk-cnt-size 100
                                buffer-cnt-size 1000
                                use-ack false
                                ack-resend-time 60000}}]
@@ -53,7 +53,7 @@
         output-stream (s/stream 1000)
         client @(tcp/client {:host host :port port})
         take-timeout 100
-        flush-interval-ns (* 1000000 flush-interval)]
+        flush-interval-ns (* 10000 flush-interval)]
     (d/loop [message-chunk []
              ref-time-ns (uuid/monotonic-time)]
       (d/chain
@@ -104,12 +104,9 @@
           (fn [message-chunk]
             (s/put!
               client
-              (to-pack-forward tag message-chunk)
-              ))
+              (to-pack-forward tag message-chunk)))
           (fn [& args]
-            (d/recur)
-            )))
-            )
+            (d/recur)))))
     buffer-stream))
 
 (defn eloquent-log [client event]
