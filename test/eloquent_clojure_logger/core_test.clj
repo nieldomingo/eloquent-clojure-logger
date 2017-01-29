@@ -73,7 +73,7 @@
                     encode-event (fn [message] message)
                     to-pack-forward (fn [tag message-chunk] message-chunk)]
         (let [client (eloquent-client
-                       :flush-interval 1000
+                       :flush-interval 1000000
                        :max-chunk-cnt-size 5)]
           (dotimes [n 12] (eloquent-log client ""))
           (let [chunk1 @(s/try-take! tcp-client-stream ::drained 1 ::timeout)
@@ -82,4 +82,15 @@
             (is (= (count chunk1) 5))
             (is (= (count chunk2) 5))
             (is (identical? chunk3 ::timeout)))))))
-            )
+  (testing "testing flush-interval"
+    (let [tcp-client-stream (s/stream)]
+      (with-redefs [tcp/client (fn [&args] (future tcp-client-stream))
+                    encode-event (fn [message] message)
+                    to-pack-forward (fn [tag message-chunk] message-chunk)]
+        (let [client (eloquent-client
+                       :flush-interval 1
+                       :max-chunk-cnt-size 5)]
+          (dotimes [n 3] (eloquent-log client ""))
+          (let [chunk1 @(s/try-take! tcp-client-stream ::drained 100 ::timeout)]
+            (is (and (coll? chunk1) (= (count chunk1) 3)))
+            ))))))

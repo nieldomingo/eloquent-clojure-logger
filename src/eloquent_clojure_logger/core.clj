@@ -44,14 +44,16 @@
                           :or {host "127.0.0.1"
                                port 24224
                                tag "my.tag"
-                               flush-interval 10
+                               flush-interval 10000
                                max-chunk-cnt-size 2
                                buffer-cnt-size 1000}}]
   (let [buffer-stream (s/stream buffer-cnt-size)
         output-stream (s/stream 1000)
         client @(tcp/client {:host host :port port})
-        take-timeout 100]
-    (d/loop [message-chunk []]
+        take-timeout 100
+        flush-interval-ns (* 1000000 flush-interval)]
+    (d/loop [message-chunk []
+             ref-time-ns (uuid/monotonic-time)]
       (d/chain
         (s/try-take! buffer-stream ::drained take-timeout ::timeout)
         (fn [message]
@@ -62,15 +64,17 @@
             (conj message-chunk (encode-event message))))
         (fn [message-chunk]
           (cond
-            (= (count message-chunk) max-chunk-cnt-size) [message-chunk ::flush]
-            ;TODO: add time flushing here
+            (or
+              (>= (- (uuid/monotonic-time) ref-time-ns) flush-interval-ns)
+              (= (count message-chunk) max-chunk-cnt-size))
+            [message-chunk ::flush]
             :else [message-chunk ::no-flush]))
         (fn [[message-chunk flush-flag]]
           (if (identical? ::flush flush-flag)
             (do
               @(s/put! output-stream message-chunk)
-              (d/recur []))
-            (d/recur message-chunk)))))
+              (d/recur [] (uuid/monotonic-time)))
+            (d/recur message-chunk ref-time-ns)))))
     (d/loop []
       (d/chain
         (s/take! output-stream)
