@@ -78,55 +78,57 @@
                 (d/recur [] (uuid/monotonic-time)))
               (d/recur message-chunk ref-time-ns)))))))
 
-(defn- send-with-acks [receiver tag ack-resend-time]
-  (fn [message-chunk]
-    (let [chunk-id (gen-chunk-id)
-          get-response (fn [& args]
-                         (s/try-take!
+(defn- send-with-acks [host port tag ack-resend-time]
+  (let [receiver @(tcp/client {:host host :port port})] 
+    (fn [message-chunk]
+      (let [chunk-id (gen-chunk-id)
+            get-response (fn [& args]
+                           (s/try-take!
+                             receiver
+                             ::drained
+                             ack-resend-time
+                             ::timeout))
+            send-chunk (fn [message-chunk]
+                         (s/put!
                            receiver
-                           ::drained
-                           ack-resend-time
-                           ::timeout))
-          send-chunk (fn [message-chunk]
-                       (s/put!
-                         receiver
-                         (package-message-chunk
-                           tag
-                           message-chunk
-                           {"chunk" chunk-id})))
-          valid-response-id? (fn [response chunk-id]
-                              (=
-                                chunk-id
-                                ((msg/unpack response) "ack")))]
-      (d/loop []
-        (d/chain
-          (send-chunk message-chunk)
-          get-response
-          (fn [response]
-            (if (or
-                  (identical? response ::timeout)
-                  (not (valid-response-id? response chunk-id)))
-               (d/recur))))))))
+                           (package-message-chunk
+                             tag
+                             message-chunk
+                             {"chunk" chunk-id})))
+            valid-response-id? (fn [response chunk-id]
+                                (=
+                                  chunk-id
+                                  ((msg/unpack response) "ack")))]
+        (d/loop []
+          (d/chain
+            (send-chunk message-chunk)
+            get-response
+            (fn [response]
+              (if (or
+                    (identical? response ::timeout)
+                    (not (valid-response-id? response chunk-id)))
+                 (d/recur)))))))))
 
-(defn- send-fire-forget [receiver tag]
-  (fn [message-chunk]
+(defn- send-fire-forget [host port tag]
+  (let [receiver @(tcp/client {:host host :port port})]
+    (fn [message-chunk]
     (s/put!
       receiver
-      (package-message-chunk tag message-chunk))))
+      (package-message-chunk tag message-chunk)))))
 
-(defn- at-least-once-sender [message-chunk-stream receiver tag ack-resend-time]
+(defn- at-least-once-sender [message-chunk-stream host port tag ack-resend-time]
   (d/loop []
     (d/chain
       (s/take! message-chunk-stream)
-      (send-with-acks receiver tag ack-resend-time)
+      (send-with-acks host port tag ack-resend-time)
       (fn [& args]
         (d/recur)))))
 
-(defn- at-most-once-sender [message-chunk-stream receiver tag]
+(defn- at-most-once-sender [message-chunk-stream host port tag]
   (d/loop []
     (d/chain
       (s/take! message-chunk-stream)
-      (send-fire-forget receiver tag)
+      (send-fire-forget host port tag)
       (fn [& args]
         (d/recur)))))
 
@@ -142,7 +144,8 @@
                                ack-resend-time 60000}}]
   (let [buffer-stream (s/stream buffer-cnt-size)
         output-stream (s/stream 1000)
-        client @(tcp/client {:host host :port port})]
+        ;client @(tcp/client {:host host :port port})
+        ]
     (message-aggregator
       buffer-stream
       output-stream
@@ -151,12 +154,14 @@
     (if use-ack
       (at-least-once-sender
         output-stream
-        client
+        host
+        port
         tag
         ack-resend-time)
       (at-most-once-sender
         output-stream
-        client
+        host
+        port
         tag))
     buffer-stream))
 
