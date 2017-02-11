@@ -30,14 +30,96 @@
 (defn gen-chunk-id []
   (.encodeToString base64-encoder (uuid/to-byte-array (uuid/v4))))
 
-(defn to-pack-forward
-  ([tag messages] (to-pack-forward tag messages {}))
+(defn package-message-chunk
+  ([tag messages] (package-message-chunk tag messages {}))
   ([tag messages options]
     (msg/pack [tag
                 (event-stream messages)
                 (merge
                  options
                  {"size" (count messages)})])))
+
+(defn- message-aggregator [input-stream
+                           message-chunk-stream
+                           flush-interval
+                           max-chunk-cnt-size]
+    (let [take-timeout 100
+          flush-interval-ns (* 10000 flush-interval)]
+      (d/loop [message-chunk []
+               ref-time-ns (uuid/monotonic-time)]
+        (d/chain
+          (s/try-take! input-stream ::drained take-timeout ::timeout)
+          (fn [message]
+            (if (or
+                  (identical? message ::drained)
+                  (identical? message ::timeout))
+              message-chunk
+              (conj message-chunk (encode-event message))))
+          (fn [message-chunk]
+            (if
+              (or
+                (>= (- (uuid/monotonic-time) ref-time-ns) flush-interval-ns)
+                (= (count message-chunk) max-chunk-cnt-size))
+              [message-chunk ::flush]
+              [message-chunk ::no-flush]))
+          (fn [[message-chunk flush-flag]]
+            (if (identical? ::flush flush-flag)
+              (do
+                @(s/put! message-chunk-stream message-chunk)
+                (d/recur [] (uuid/monotonic-time)))
+              (d/recur message-chunk ref-time-ns)))))))
+
+(defn- send-with-acks [receiver tag ack-resend-time]
+  (fn [message-chunk]
+    (let [chunk-id (gen-chunk-id)
+          get-response (fn [& args]
+                         (s/try-take!
+                           receiver
+                           ::drained
+                           ack-resend-time
+                           ::timeout))
+          send-chunk (fn [message-chunk]
+                       (s/put!
+                         receiver
+                         (package-message-chunk
+                           tag
+                           message-chunk
+                           {"chunk" chunk-id})))
+          valid-response-id (fn [response chunk-id]
+                              (=
+                                chunk-id
+                                ((msg/unpack response) "ack")))]
+      (d/loop []
+        (d/chain
+          (send-chunk message-chunk)
+          get-response
+          (fn [response]
+            (if (or
+                  (identical? response ::timeout)
+                  (not (valid-response-id response chunk-id)))
+               (d/recur))))))))
+
+(defn- send-fire-forget [receiver tag]
+  (fn [message-chunk]
+    (s/put!
+      receiver
+      (package-message-chunk tag message-chunk))))
+
+(defn- at-least-once-sender [message-chunk-stream receiver tag ack-resend-time]
+  (d/loop []
+    (d/chain
+      (s/take! message-chunk-stream)
+      (send-with-acks receiver tag ack-resend-time)
+      (fn [& args]
+        (d/recur)))))
+
+(defn- at-most-once-sender [message-chunk-stream receiver tag]
+  (d/loop []
+    (d/chain
+      (s/take! message-chunk-stream)
+      (send-fire-forget receiver tag)
+      (fn [& args]
+        (d/recur)))))
 
 (defn eloquent-client [& {:keys [host port tag flush-interval max-chunk-cnt-size
                                  buffer-cnt-size use-ack ack-resend-time]
@@ -51,62 +133,22 @@
                                ack-resend-time 60000}}]
   (let [buffer-stream (s/stream buffer-cnt-size)
         output-stream (s/stream 1000)
-        client @(tcp/client {:host host :port port})
-        take-timeout 100
-        flush-interval-ns (* 10000 flush-interval)]
-    (d/loop [message-chunk []
-             ref-time-ns (uuid/monotonic-time)]
-      (d/chain
-        (s/try-take! buffer-stream ::drained take-timeout ::timeout)
-        (fn [message]
-          (if (or
-                (identical? message ::drained)
-                (identical? message ::timeout))
-            message-chunk
-            (conj message-chunk (encode-event message))))
-        (fn [message-chunk]
-          (cond
-            (or
-              (>= (- (uuid/monotonic-time) ref-time-ns) flush-interval-ns)
-              (= (count message-chunk) max-chunk-cnt-size))
-            [message-chunk ::flush]
-            :else [message-chunk ::no-flush]))
-        (fn [[message-chunk flush-flag]]
-          (if (identical? ::flush flush-flag)
-            (do
-              @(s/put! output-stream message-chunk)
-              (d/recur [] (uuid/monotonic-time)))
-            (d/recur message-chunk ref-time-ns)))))
+        client @(tcp/client {:host host :port port})]
+    (message-aggregator
+      buffer-stream
+      output-stream
+      flush-interval
+      max-chunk-cnt-size)
     (if use-ack
-      (d/loop []
-        (d/chain
-          (s/take! output-stream)
-          (fn [message-chunk]
-            (let [chunk-id (gen-chunk-id)]
-              (d/loop []
-                (d/chain
-                  (s/put!
-                    client
-                    (to-pack-forward tag message-chunk {"chunk" chunk-id}))
-                  (fn [response]
-                    (s/try-take! client ::drained ack-resend-time ::timeout))
-                  (fn [response]
-                    (if (identical? response ::timeout)
-                      (d/recur)
-                      (let [response-chunk-id ((msg/unpack response) "ack")]
-                        (when-not (= response-chunk-id chunk-id)
-                          (d/recur)))))))))
-          (fn [& args]
-            (d/recur))))
-      (d/loop []
-        (d/chain
-          (s/take! output-stream)
-          (fn [message-chunk]
-            (s/put!
-              client
-              (to-pack-forward tag message-chunk)))
-          (fn [& args]
-            (d/recur)))))
+      (at-least-once-sender
+        output-stream
+        client
+        tag
+        ack-resend-time)
+      (at-most-once-sender
+        output-stream
+        client
+        tag))
     buffer-stream))
 
 (defn eloquent-log [client event]

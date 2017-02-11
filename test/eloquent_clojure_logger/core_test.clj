@@ -35,9 +35,9 @@
 
 (def message (byte-array (map (comp byte int) "ascii")))
 
-(deftest test-pack-foward
+(deftest test-package-message-chunk
   (testing "Testing outermost envelope."
-    (let [encoded (to-pack-forward "my.tag" [message])
+    (let [encoded (package-message-chunk "my.tag" [message])
           outermost (msg/unpack encoded)
           options (last outermost)]
       (is (= (count outermost) 3))
@@ -45,7 +45,7 @@
       (is (map? options))
       (is (= (options "size") 1))
       (is (not (contains? options "chunk"))))
-    (let [encoded (to-pack-forward
+    (let [encoded (package-message-chunk
                    "my.other.tag"
                    [message message]
                    {"chunk" "chunk_id"})
@@ -55,13 +55,13 @@
       (is (= (options "size") 2))
       (is (= (options "chunk") "chunk_id"))))
   (testing "Testing event-stream"
-    (let [encoded (to-pack-forward
+    (let [encoded (package-message-chunk
                     "my.tag"
                     [message])
           outermost (msg/unpack encoded)
           encoded-event-stream (second outermost)]
       (is (= (String. (bytes encoded-event-stream)) "ascii")))
-    (let [encoded (to-pack-forward
+    (let [encoded (package-message-chunk
                     "my.tag"
                     [message message])
           outermost (msg/unpack encoded)
@@ -74,7 +74,7 @@
     (let [tcp-client-stream (s/stream)]
       (with-redefs [tcp/client (fn [&args] (future tcp-client-stream))
                     encode-event (fn [message] message)
-                    to-pack-forward (fn [tag message-chunk] message-chunk)]
+                    package-message-chunk (fn [tag message-chunk] message-chunk)]
         (let [client (eloquent-client
                        :flush-interval 1000000
                        :max-chunk-cnt-size 5)]
@@ -89,12 +89,12 @@
     (let [tcp-client-stream (s/stream)]
       (with-redefs [tcp/client (fn [&args] (future tcp-client-stream))
                     encode-event (fn [message] message)
-                    to-pack-forward (fn [tag message-chunk] message-chunk)]
+                    package-message-chunk (fn [tag message-chunk] message-chunk)]
         (let [client (eloquent-client
                        :flush-interval 1
                        :max-chunk-cnt-size 5)]
           (dotimes [n 3] (eloquent-log client ""))
-          (let [chunk1 @(s/try-take! tcp-client-stream ::drained 100 ::timeout)]
+          (let [chunk1 @(s/try-take! tcp-client-stream ::drained 1000 ::timeout)]
             (is (and (coll? chunk1) (= (count chunk1) 3))))))))
   (testing "testing acks retry"
     (let [tcp-client-sink (s/stream 10)
