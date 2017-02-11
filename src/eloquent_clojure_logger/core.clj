@@ -99,22 +99,38 @@
                                 (=
                                   chunk-id
                                   ((msg/unpack response) "ack")))]
-        (d/loop []
-          (d/chain
-            (send-chunk message-chunk)
-            get-response
-            (fn [response]
-              (if (or
-                    (identical? response ::timeout)
-                    (not (valid-response-id? response chunk-id)))
-                 (d/recur)))))))))
+        (d/loop [receiver]
+          (->
+            (future 1)
+            (d/chain
+              (fn [& args]
+                (send-chunk message-chunk))
+              get-response
+              (fn [response]
+                (if (or
+                      (identical? response ::timeout)
+                      (not (valid-response-id? response chunk-id)))
+                   (d/recur))))
+            (d/catch
+              java.io.IOException
+              (fn [& args]
+                (d/recur @(tcp/client {:host host :port port}))))))))))
 
 (defn- send-fire-forget [host port tag]
   (let [receiver @(tcp/client {:host host :port port})]
     (fn [message-chunk]
-    (s/put!
-      receiver
-      (package-message-chunk tag message-chunk)))))
+      (d/loop [receiver receiver]
+        (->
+          (future 1)
+          (d/chain
+            (fn [& args]
+              (s/put!
+                receiver
+                (package-message-chunk tag message-chunk))))
+          (d/catch
+            java.io.IOException
+            (fn [& args]
+              (d/recur @(tcp/client {:host host :port port})))))))))
 
 (defn- at-least-once-sender [message-chunk-stream host port tag ack-resend-time]
   (d/loop []
