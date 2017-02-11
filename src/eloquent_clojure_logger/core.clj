@@ -44,22 +44,31 @@
                            flush-interval
                            max-chunk-cnt-size]
     (let [take-timeout 100
-          flush-interval-ns (* 10000 flush-interval)]
+          flush-interval-ns (* 10000 flush-interval)
+          is-not-message? (fn [message]
+                            (or
+                              (identical? message ::drained)
+                              (identical? message ::timeout)))
+          should-flush? (fn [message-chunk ref-time-ns]
+                          (or
+                            (>=
+                              (-
+                                (uuid/monotonic-time)
+                                ref-time-ns)
+                                flush-interval-ns)
+                            (=
+                              (count message-chunk)
+                              max-chunk-cnt-size)))]
       (d/loop [message-chunk []
                ref-time-ns (uuid/monotonic-time)]
         (d/chain
           (s/try-take! input-stream ::drained take-timeout ::timeout)
           (fn [message]
-            (if (or
-                  (identical? message ::drained)
-                  (identical? message ::timeout))
+            (if (is-not-message? message)
               message-chunk
               (conj message-chunk (encode-event message))))
           (fn [message-chunk]
-            (if
-              (or
-                (>= (- (uuid/monotonic-time) ref-time-ns) flush-interval-ns)
-                (= (count message-chunk) max-chunk-cnt-size))
+            (if (should-flush? message-chunk ref-time-ns)
               [message-chunk ::flush]
               [message-chunk ::no-flush]))
           (fn [[message-chunk flush-flag]]
@@ -85,7 +94,7 @@
                            tag
                            message-chunk
                            {"chunk" chunk-id})))
-          valid-response-id (fn [response chunk-id]
+          valid-response-id? (fn [response chunk-id]
                               (=
                                 chunk-id
                                 ((msg/unpack response) "ack")))]
@@ -96,7 +105,7 @@
           (fn [response]
             (if (or
                   (identical? response ::timeout)
-                  (not (valid-response-id response chunk-id)))
+                  (not (valid-response-id? response chunk-id)))
                (d/recur))))))))
 
 (defn- send-fire-forget [receiver tag]
